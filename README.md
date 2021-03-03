@@ -1,6 +1,6 @@
 # workshop_recommender
 
-Link to Visualization Tool: 
+Link to Visualization Tool: http://thamsuppp.pythonanywhere.com/
 
 # Visualization Tool Instructions
 
