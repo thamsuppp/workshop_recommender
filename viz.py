@@ -68,54 +68,53 @@ app.layout = html.Div([
         html.H1("Viz App for Workshop Recommender")],
              style={'textAlign': "center", "padding-bottom": "10", "padding-top": "10"}),
 
+        html.A('Readme', id = 'link', href='http://google.com', target='_blank'),     
+
         dcc.Checklist(
             id = 'author_event_graph_checklist',
             options = [{'label': 'Show Authors (dot)', 'value': 'A'},
                     {'label': 'Show Events (square)', 'value': 'E'}],
             value = ['A', 'E']),
-
         dcc.Checklist(
             id = 'grey_out_checklist',
             options = [{'label': 'Grey out unselected?', 'value': 'Y'}],
             value = ['Y']),
-
         dcc.Checklist(
             id = 'select_all_people_checklist',
             options = [{'label': 'Select all people', 'value': 'Y'}],
             value = ['Y']),
-
         dcc.Dropdown(
             id = 'lda_dim_dropdown',
             options = [{'label': i, 'value': i} for i in range(20)],
             placeholder = 'Choose LDA Dimension',
             multi = True,
             value = list(range(20))),
-
         dcc.Dropdown(
             id = 'people_dropdown',
             options = [{'label': name, 'value': name} for name in people_names],
             placeholder = 'Choose Person',
             multi = True,
             value = []),
-
         html.Div([
-            html.H3('Info on Clicked Point'),
+            html.H4('Info on Clicked Point'),
             html.Div('', id = 'click_info_div'),
-            html.A('Search on Google', id = 'link', href='http://google.com', target='_blank'),
+            html.Button(html.A('Search on Google', id = 'link', href='http://google.com', target='_blank')),
             ]),
         html.Button('Generate Recommendations', id = 'rec_button'),
-    
         html.Div([
 
-            html.H3('Recommendation'),
+            html.H4('Recommendations'),
+            dcc.Checklist(
+            id = 'show_recs_checklist',
+            options = [{'label': 'Show Recommendations', 'value': 'Y'}],
+            value = ['Y']),
+
             html.Div('', id = 'rec_div'),
 
             dash_table.DataTable(
                 id = 'rec_table',
                 columns = [{'name': i, 'id': i} for i in ['name', 'author_id', 'score']],
                 data = [],
-                row_selectable='multi',
-                selected_rows = []
             ),
 
 
@@ -167,15 +166,9 @@ def print_df_button(click_data, test_code_input):
 )
 def recommendation(rec_button, click_data):
     if click_data:
-
         print(click_data['points'][0])
-
-        hover_text = click_data['points'][0]['hovertext']
-        search_term = click_data['points'][0]['hovertext'].split('\n')[0]
-
         # Get the event_id
         event_id = click_data['points'][0]['customdata']
-
         # Get the 20D event vector
         event_vector = events.loc[events['event_id'] == event_id, [str(e) for e in range(20)]].to_numpy()[0]
         event_actual_people_ids = events.loc[events['event_id'] == event_id, 'people_ids'].item()
@@ -193,7 +186,6 @@ def recommendation(rec_button, click_data):
         # Get the ordered list of recommended people to the event
         recs_order = authors_scores_df['author_id'].tolist()
         print('Recs: {}'.format(recs_order[:10]))
-
         recs_names = [id_people_mapping[x] for x in recs_order]
         print('Recs Names: {}'.format(recs_names[:10]))
 
@@ -207,23 +199,27 @@ def recommendation(rec_button, click_data):
     else:
         return ''
 
-
-
-
 @app.callback(
     Output('graph', 'figure'),
     [Input('author_event_graph_checklist', 'value'),
     Input('lda_dim_dropdown', 'value'),
     Input('people_dropdown', 'value'),
     Input('grey_out_checklist', 'value'),
-    Input('select_all_people_checklist', 'value')]
+    Input('show_recs_checklist', 'value'),
+    Input('select_all_people_checklist', 'value'),
+    Input('rec_table', 'data')]
 )
-def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, grey_out_checklist_value, select_all_people_checklist_value):
+def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, grey_out_checklist_value, 
+show_recs_checklist_value, select_all_people_checklist_value, rec_table):
 
     tsne_all = tsne_df.copy()
     show_authors, show_events = 'A' in checklist_values, 'E' in checklist_values
     grey_out_checklist_value = 'Y' in grey_out_checklist_value
     select_all_people_checklist_value = 'Y' in select_all_people_checklist_value
+    show_recs_checklist_value = 'Y' in show_recs_checklist_value
+
+    print('show_recs_checklist_value is')
+    print(show_recs_checklist_value)
 
     # Convert selected people names to their ids
 
@@ -252,12 +248,44 @@ def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, gr
 
     # After this, everything to be shown is True
 
+    fig = go.Figure()
+    # Plot the recommended people
+    if show_recs_checklist_value == True:
+        print('test')
+
+        # Get recommended author ids
+        rec_author_ids = [e['author_id'] for e in rec_table]
+        print(rec_author_ids)
+
+        # Think of the actual solution to this (nan and int becomes float)
+        tsne_rec_subset = tsne_all.loc[tsne_all['author_id'].apply(lambda x: ~np.isnan(x) and int(x) in rec_author_ids), :]
+        print(tsne_rec_subset)
+        fig.add_trace(
+        go.Scatter(
+            x = tsne_rec_subset['tsne_0'], 
+            y = tsne_rec_subset['tsne_1'], 
+            customdata = tsne_rec_subset['event_id'],
+            mode = 'markers',
+            marker_symbol = 17,
+            opacity = 1,
+            name = 'Recs',
+            hovertext = tsne_rec_subset['hover_text'], 
+            marker = dict(
+                color = 'red',
+                size = 12,
+                line=dict(
+                    width=0.3
+                )
+            ),
+            showlegend = True
+            )
+        )
+
+
     # If grey out , then filter and keep only those with is_shown = True
     if grey_out_checklist_value == False:
         tsne_all = tsne_all.loc[tsne_all['is_shown'] == True, :]
     
-    fig = go.Figure()
-
     for i in range(20):
 
         if grey_out_checklist_value == True:
@@ -356,9 +384,7 @@ def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, gr
             showlegend = True
             )
         )
-    
-
-                                    
+                                  
     fig.update_layout(
         width=1000,
         height=800,
