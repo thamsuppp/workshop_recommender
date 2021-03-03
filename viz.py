@@ -14,6 +14,7 @@ import requests
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+from flask import Flask
 
 import gensim
 from gensim.models.ldamodel import LdaModel
@@ -21,8 +22,9 @@ from gensim import corpora, models
 
 #Set overlay colors for data
 
+flask_app = Flask(__name__)
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
-app = dash.Dash(__name__,external_stylesheets=external_stylesheets)
+app = dash.Dash(__name__, server = flask_app, external_stylesheets=external_stylesheets)
 server = app.server
 app.config.suppress_callback_exceptions = True
 if 'DYNO' in os.environ:
@@ -42,11 +44,13 @@ with open('Data/events_people_dict.json', 'r') as fp:
     events_people_dict = json.load(fp)
 events_people_dict = {int(k): v for k, v in events_people_dict.items()}
 authors.columns = [str(i) for i in range(20)] + ['author_id', 'n_articles', 'name']
-ldamodel = LdaModel.load('Data/LDAModel_intro20.model')
+#ldamodel = LdaModel.load('Data/LDAModel_intro20.model')
 dictionary = corpora.Dictionary.load('Data/dictionary_intro20')
 reg_coefs = np.load('Data/model_coefs.npy')
 
 ### Loading data and preprocessing
+
+# CHANGE TO data/tsne_all.csv when deploying
 tsne_df = pd.read_csv('tsne_all.csv')
 
 # Convert the people_ids column from string, to list of ints
@@ -106,8 +110,9 @@ app.layout = html.Div([
             html.H4('Recommendations'),
             dcc.Checklist(
             id = 'show_recs_checklist',
-            options = [{'label': 'Show Recommendations', 'value': 'Y'}],
-            value = ['Y']),
+            options = [{'label': 'Show Recommendations', 'value': 'Y'},
+            {'label': 'Show Actual Speakers', 'value': 'Z'}],
+            value = ['Y', 'Z']),
 
             html.Div('', id = 'rec_div'),
 
@@ -116,7 +121,7 @@ app.layout = html.Div([
                 columns = [{'name': i, 'id': i} for i in ['name', 'author_id', 'score']],
                 data = [],
             ),
-
+            html.Button('Clear Recs', id = 'clear_rec_button'),
 
             dcc.Input(id = 'test_code_input', placeholder = 'type code...'),
             html.Button('Test Code', id = 'test_code_button'),
@@ -126,7 +131,6 @@ app.layout = html.Div([
         dcc.Graph(id = 'graph')
 ]
 , className="container")
-
 
 @app.callback(
     [Output('link', 'href'),
@@ -161,43 +165,54 @@ def print_df_button(click_data, test_code_input):
 
 @app.callback(
     Output('rec_table', 'data'),
-    [Input('rec_button', 'n_clicks')],
+    [Input('rec_button', 'n_clicks'),
+    Input('clear_rec_button', 'n_clicks')],
     [State('graph', 'clickData')]
 )
-def recommendation(rec_button, click_data):
-    if click_data:
-        print(click_data['points'][0])
-        # Get the event_id
-        event_id = click_data['points'][0]['customdata']
-        # Get the 20D event vector
-        event_vector = events.loc[events['event_id'] == event_id, [str(e) for e in range(20)]].to_numpy()[0]
-        event_actual_people_ids = events.loc[events['event_id'] == event_id, 'people_ids'].item()
-        # Get every author's 20D vector
-        authors_mat = authors.iloc[:, 0:20].to_numpy()
-        # Get the features i.e. absolute value of diff between the event and author dimension
-        x_mat = abs(authors_mat - event_vector)
-        # Get scores for every author by multipling
-        authors_scores = x_mat @ reg_coefs.T
+def recommendation(rec_button, clear_rec_button, click_data):
 
-        authors_scores_df = pd.concat([authors[['name', 'n_articles', 'author_id']], pd.DataFrame(authors_scores)], axis = 1)
-        authors_scores_df.columns = ['name', 'n_articles', 'author_id', 'score']
-        authors_scores_df = authors_scores_df.sort_values('score', ascending = False)
+    ctx = dash.callback_context
+    if ctx.triggered[0]["prop_id"].split(".")[0] == 'rec_button':
 
-        # Get the ordered list of recommended people to the event
-        recs_order = authors_scores_df['author_id'].tolist()
-        #print('Recs: {}'.format(recs_order[:10]))
-        recs_names = [id_people_mapping[x] for x in recs_order]
-        #print('Recs Names: {}'.format(recs_names[:10]))
+        if click_data:
+            print(click_data['points'][0])
+            # Get the event_id
+            event_id = click_data['points'][0]['customdata']
+            # Get the 20D event vector
+            event_vector = events.loc[events['event_id'] == event_id, [str(e) for e in range(20)]].to_numpy()[0]
+            event_actual_people_ids = events.loc[events['event_id'] == event_id, 'people_ids'].item()
+            # Get every author's 20D vector
+            authors_mat = authors.iloc[:, 0:20].to_numpy()
+            # Get the features i.e. absolute value of diff between the event and author dimension
+            x_mat = abs(authors_mat - event_vector)
+            # Get scores for every author by multipling
+            authors_scores = x_mat @ reg_coefs.T
 
-        # Get the recommendation order of the actual recommended people
-        actual_order = [recs_order.index(actual_id) for actual_id in event_actual_people_ids]
-        #print('Rec Order of Actual Speakers: {}'.format(actual_order))
+            authors_scores_df = pd.concat([authors[['name', 'n_articles', 'author_id']], pd.DataFrame(authors_scores)], axis = 1)
+            authors_scores_df.columns = ['name', 'n_articles', 'author_id', 'score']
+            authors_scores_df = authors_scores_df.sort_values('score', ascending = False)
 
-        rec_table = authors_scores_df[['name', 'author_id', 'score']][0:10].to_dict('records')
+            # Get the ordered list of recommended people to the event
+            recs_order = authors_scores_df['author_id'].tolist()
+            #print('Recs: {}'.format(recs_order[:10]))
+            recs_names = [id_people_mapping[x] for x in recs_order]
+            #print('Recs Names: {}'.format(recs_names[:10]))
 
-        return rec_table
+            # Get the recommendation order of the actual recommended people
+            actual_order = [recs_order.index(actual_id) for actual_id in event_actual_people_ids]
+            #print('Rec Order of Actual Speakers: {}'.format(actual_order))
+
+            rec_table = authors_scores_df[['name', 'author_id', 'score']][0:10].to_dict('records')
+
+            return rec_table
+        else:
+            return []
+    elif ctx.triggered[0]["prop_id"].split(".")[0] == 'clear_rec_button':
+
+        return []
+    
     else:
-        return ''
+        return []
 
 @app.callback(
     Output('graph', 'figure'),
@@ -207,16 +222,21 @@ def recommendation(rec_button, click_data):
     Input('grey_out_checklist', 'value'),
     Input('show_recs_checklist', 'value'),
     Input('select_all_people_checklist', 'value'),
-    Input('rec_table', 'data')]
+    Input('rec_table', 'data'),
+    Input('clear_rec_button', 'n_clicks')],
+    [State('graph', 'clickData')]
 )
 def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, grey_out_checklist_value, 
-show_recs_checklist_value, select_all_people_checklist_value, rec_table):
+show_recs_checklist_value, select_all_people_checklist_value, rec_table, clear_rec_button, click_data):
 
     tsne_all = tsne_df.copy()
     show_authors, show_events = 'A' in checklist_values, 'E' in checklist_values
     grey_out_checklist_value = 'Y' in grey_out_checklist_value
     select_all_people_checklist_value = 'Y' in select_all_people_checklist_value
-    show_recs_checklist_value = 'Y' in show_recs_checklist_value
+    show_recs, show_actual_speakers = 'Y' in show_recs_checklist_value, 'Z' in show_recs_checklist_value
+
+    if dash.callback_context.triggered[0]["prop_id"].split(".")[0] == 'clear_rec_button' or rec_table == []:
+        show_actual_speakers = False
 
     # Convert selected people names to their ids
 
@@ -247,13 +267,12 @@ show_recs_checklist_value, select_all_people_checklist_value, rec_table):
 
     fig = go.Figure()
     # Plot the recommended people
-    if show_recs_checklist_value == True:
+    if show_recs == True:
         # Get recommended author ids
         rec_author_ids = [e['author_id'] for e in rec_table]
         # Think of the actual solution to this (nan and int becomes float)
         tsne_rec_subset = tsne_all.loc[tsne_all['author_id'].apply(lambda x: ~np.isnan(x) and int(x) in rec_author_ids), :]
-        fig.add_trace(
-        go.Scatter(
+        trace_recs = go.Scatter(
             x = tsne_rec_subset['tsne_0'], 
             y = tsne_rec_subset['tsne_1'], 
             customdata = tsne_rec_subset['event_id'],
@@ -264,16 +283,38 @@ show_recs_checklist_value, select_all_people_checklist_value, rec_table):
             hovertext = tsne_rec_subset['hover_text'], 
             marker = dict(
                 color = 'red',
-                size = 12,
+                size = 15,
                 line=dict(
                     width=0.3
                 )
             ),
             showlegend = True
             )
-        )
+        
+    if show_actual_speakers == True and click_data:
+        event_id = click_data['points'][0]['customdata']
+        event_actual_speakers_ids = tsne_all.loc[tsne_all['event_id'] == event_id, 'people_ids'].item()
+        tsne_rec_subset = tsne_all.loc[tsne_all['author_id'].apply(lambda x: ~np.isnan(x) and int(x) in event_actual_speakers_ids), :]
 
-
+        trace_actual = go.Scatter(
+            x = tsne_rec_subset['tsne_0'], 
+            y = tsne_rec_subset['tsne_1'], 
+            customdata = tsne_rec_subset['event_id'],
+            mode = 'markers',
+            marker_symbol = 17,
+            opacity = 1,
+            name = 'Actual',
+            hovertext = tsne_rec_subset['hover_text'], 
+            marker = dict(
+                color = 'green',
+                size = 15,
+                line=dict(
+                    width=0.3
+                )
+            ),
+            showlegend = True
+            )
+        
     # If grey out , then filter and keep only those with is_shown = True
     if grey_out_checklist_value == False:
         tsne_all = tsne_all.loc[tsne_all['is_shown'] == True, :]
@@ -376,6 +417,11 @@ show_recs_checklist_value, select_all_people_checklist_value, rec_table):
             showlegend = True
             )
         )
+
+    if show_recs == True and trace_recs:
+        fig.add_trace(trace_recs)
+    if show_actual_speakers == True and click_data and trace_actual:
+        fig.add_trace(trace_actual)
                                   
     fig.update_layout(
         width=1000,
@@ -387,6 +433,7 @@ show_recs_checklist_value, select_all_people_checklist_value, rec_table):
 
     return fig
 
+app.title = 'Workshop Recommender'
 
 if __name__ == '__main__':
     app.run_server(debug=False)
