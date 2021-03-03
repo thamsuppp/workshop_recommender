@@ -68,7 +68,7 @@ app.layout = html.Div([
         html.H1("Viz App for Workshop Recommender")],
              style={'textAlign': "center", "padding-bottom": "10", "padding-top": "10"}),
 
-        html.A('Readme', id = 'link', href='http://google.com', target='_blank'),     
+        html.A('Readme', id = 'readme_link', href='https://github.com/thamsuppp/workshop_recommender', target='_blank'),     
 
         dcc.Checklist(
             id = 'author_event_graph_checklist',
@@ -185,13 +185,13 @@ def recommendation(rec_button, click_data):
 
         # Get the ordered list of recommended people to the event
         recs_order = authors_scores_df['author_id'].tolist()
-        print('Recs: {}'.format(recs_order[:10]))
+        #print('Recs: {}'.format(recs_order[:10]))
         recs_names = [id_people_mapping[x] for x in recs_order]
-        print('Recs Names: {}'.format(recs_names[:10]))
+        #print('Recs Names: {}'.format(recs_names[:10]))
 
         # Get the recommendation order of the actual recommended people
         actual_order = [recs_order.index(actual_id) for actual_id in event_actual_people_ids]
-        print('Rec Order of Actual Speakers: {}'.format(actual_order))
+        #print('Rec Order of Actual Speakers: {}'.format(actual_order))
 
         rec_table = authors_scores_df[['name', 'author_id', 'score']][0:10].to_dict('records')
 
@@ -217,9 +217,6 @@ show_recs_checklist_value, select_all_people_checklist_value, rec_table):
     grey_out_checklist_value = 'Y' in grey_out_checklist_value
     select_all_people_checklist_value = 'Y' in select_all_people_checklist_value
     show_recs_checklist_value = 'Y' in show_recs_checklist_value
-
-    print('show_recs_checklist_value is')
-    print(show_recs_checklist_value)
 
     # Convert selected people names to their ids
 
@@ -251,15 +248,10 @@ show_recs_checklist_value, select_all_people_checklist_value, rec_table):
     fig = go.Figure()
     # Plot the recommended people
     if show_recs_checklist_value == True:
-        print('test')
-
         # Get recommended author ids
         rec_author_ids = [e['author_id'] for e in rec_table]
-        print(rec_author_ids)
-
         # Think of the actual solution to this (nan and int becomes float)
         tsne_rec_subset = tsne_all.loc[tsne_all['author_id'].apply(lambda x: ~np.isnan(x) and int(x) in rec_author_ids), :]
-        print(tsne_rec_subset)
         fig.add_trace(
         go.Scatter(
             x = tsne_rec_subset['tsne_0'], 
@@ -389,8 +381,8 @@ show_recs_checklist_value, select_all_people_checklist_value, rec_table):
         width=1000,
         height=800,
         margin = {'l': 50, 'r': 50, 't': 50, 'b': 50},
-        xaxis = dict(range = [-15, 15]),
-        yaxis = dict(range = [-15, 15])
+        xaxis = dict(range = [-20, 20]),
+        yaxis = dict(range = [-20, 20])
     )
 
     return fig
