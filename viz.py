@@ -13,6 +13,11 @@ import json
 import requests
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+
+import gensim
+from gensim.models.ldamodel import LdaModel
+from gensim import corpora, models
 
 #Set overlay colors for data
 
@@ -25,8 +30,21 @@ if 'DYNO' in os.environ:
 else:
     app_name = 'dash'
 
-
 color_list = px.colors.qualitative.Alphabet
+
+# Loading files
+authors = pd.read_csv('Data/authors_filtered_lda20vectors.csv')
+authors = authors.drop(['Unnamed: 0', 'author_id'], axis = 1)
+events = pd.read_csv('Data/events_filtered_lda20vectors.csv')
+events = events.drop('Unnamed: 0', axis = 1)
+events['people_ids'] = events['people_ids'].apply(lambda lst: list(map(lambda x: int(x), lst[1:-1].split(', '))))
+with open('Data/events_people_dict.json', 'r') as fp:
+    events_people_dict = json.load(fp)
+events_people_dict = {int(k): v for k, v in events_people_dict.items()}
+authors.columns = [str(i) for i in range(20)] + ['author_id', 'n_articles', 'name']
+ldamodel = LdaModel.load('Data/LDAModel_intro20.model')
+dictionary = corpora.Dictionary.load('Data/dictionary_intro20')
+reg_coefs = np.load('Data/model_coefs.npy')
 
 ### Loading data and preprocessing
 tsne_df = pd.read_csv('tsne_all.csv')
@@ -38,50 +56,157 @@ tsne_df.loc[tsne_df['type'] == 'Event', 'people_ids'] = tsne_df.loc[tsne_df['typ
 # Get unique people, sorted by number of papers
 people_names = tsne_df.sort_values('n_articles', ascending = False)['name'].unique().tolist()
 
-# Mapping from person name -> person id
-people_id_mapping = {name:int(idx) for name, idx in zip(tsne_df['name'], tsne_df['author_id']) if ~np.isnan(idx)}
-
+# Mapping from person name -> person id and vice versa
+people_id_mapping = {name:idx for idx, name in zip(authors['author_id'], authors['name'])}
+id_people_mapping = {idx:name for idx, name in zip(authors['author_id'], authors['name'])}
 
 
 ### APP LAYOUT ###
 app.layout = html.Div([
-    html.Div([html.H1("Viz App for Workshop Recommender")],
+    html.Div([
+        
+        html.H1("Viz App for Workshop Recommender")],
              style={'textAlign': "center", "padding-bottom": "10", "padding-top": "10"}),
 
-    dcc.Checklist(
-        id = 'author_event_graph_checklist',
-        options = [{'label': 'Show Authors (dot)', 'value': 'A'},
-                   {'label': 'Show Events (square)', 'value': 'E'}],
-        value = ['A', 'E']),
+        dcc.Checklist(
+            id = 'author_event_graph_checklist',
+            options = [{'label': 'Show Authors (dot)', 'value': 'A'},
+                    {'label': 'Show Events (square)', 'value': 'E'}],
+            value = ['A', 'E']),
 
-    dcc.Checklist(
-        id = 'grey_out_checklist',
-        options = [{'label': 'Grey out unselected?', 'value': 'Y'}],
-        value = ['Y']),
+        dcc.Checklist(
+            id = 'grey_out_checklist',
+            options = [{'label': 'Grey out unselected?', 'value': 'Y'}],
+            value = ['Y']),
 
-    dcc.Checklist(
-        id = 'select_all_people_checklist',
-        options = [{'label': 'Select all people', 'value': 'Y'}],
-        value = ['Y']),
+        dcc.Checklist(
+            id = 'select_all_people_checklist',
+            options = [{'label': 'Select all people', 'value': 'Y'}],
+            value = ['Y']),
 
-    dcc.Dropdown(
-        id = 'lda_dim_dropdown',
-        options = [{'label': i, 'value': i} for i in range(20)],
-        placeholder = 'Choose LDA Dimension',
-        multi = True,
-        value = list(range(20))),
+        dcc.Dropdown(
+            id = 'lda_dim_dropdown',
+            options = [{'label': i, 'value': i} for i in range(20)],
+            placeholder = 'Choose LDA Dimension',
+            multi = True,
+            value = list(range(20))),
 
-    dcc.Dropdown(
-        id = 'people_dropdown',
-        options = [{'label': name, 'value': name} for name in people_names],
-        placeholder = 'Choose Person',
-        multi = True,
-        value = []
-    ),
+        dcc.Dropdown(
+            id = 'people_dropdown',
+            options = [{'label': name, 'value': name} for name in people_names],
+            placeholder = 'Choose Person',
+            multi = True,
+            value = []),
+
+        html.Div([
+            html.H3('Info on Clicked Point'),
+            html.Div('', id = 'click_info_div'),
+            html.A('Search on Google', id = 'link', href='http://google.com', target='_blank'),
+            ]),
+        html.Button('Generate Recommendations', id = 'rec_button'),
+    
+        html.Div([
+
+            html.H3('Recommendation'),
+            html.Div('', id = 'rec_div'),
+
+            dash_table.DataTable(
+                id = 'rec_table',
+                columns = [{'name': i, 'id': i} for i in ['name', 'author_id', 'score']],
+                data = [],
+                row_selectable='multi',
+                selected_rows = []
+            ),
+
+
+            dcc.Input(id = 'test_code_input', placeholder = 'type code...'),
+            html.Button('Test Code', id = 'test_code_button'),
+            html.Div('', id = 'test_div')
+        ]),
+
+        dcc.Graph(id = 'graph')
+]
+, className="container")
+
+
+@app.callback(
+    [Output('link', 'href'),
+    Output('click_info_div', 'children')],
+    [Input('graph', 'clickData')]
+)
+def display_metadata_on_click(click_data):
+
+    if click_data:
+
+        idx = click_data['points'][0]['customdata']
+        hover_text = click_data['points'][0]['hovertext']
+        item = tsne_df.loc[tsne_df['hover_text'] == hover_text, :]
+        search_term = click_data['points'][0]['hovertext'].split('\n')[0]
         
+        return ('http://google.com/search?q={}'.format(search_term), '{} \n {}'.format(idx, click_data['points'][0]['hovertext']))
+    
+    else:
+        return (None, None)
 
-    dcc.Graph(id = 'graph')
-], className="container")
+@app.callback(
+    Output('test_div', 'children'),
+    [Input('test_code_button', 'n_clicks')],
+    [State('test_code_input', 'value')])
+def print_df_button(click_data, test_code_input):
+
+    if test_code_input:
+        eval(test_code_input)
+    
+    return  ''
+
+
+@app.callback(
+    Output('rec_table', 'data'),
+    [Input('rec_button', 'n_clicks')],
+    [State('graph', 'clickData')]
+)
+def recommendation(rec_button, click_data):
+    if click_data:
+
+        print(click_data['points'][0])
+
+        hover_text = click_data['points'][0]['hovertext']
+        search_term = click_data['points'][0]['hovertext'].split('\n')[0]
+
+        # Get the event_id
+        event_id = click_data['points'][0]['customdata']
+
+        # Get the 20D event vector
+        event_vector = events.loc[events['event_id'] == event_id, [str(e) for e in range(20)]].to_numpy()[0]
+        event_actual_people_ids = events.loc[events['event_id'] == event_id, 'people_ids'].item()
+        # Get every author's 20D vector
+        authors_mat = authors.iloc[:, 0:20].to_numpy()
+        # Get the features i.e. absolute value of diff between the event and author dimension
+        x_mat = abs(authors_mat - event_vector)
+        # Get scores for every author by multipling
+        authors_scores = x_mat @ reg_coefs.T
+
+        authors_scores_df = pd.concat([authors[['name', 'n_articles', 'author_id']], pd.DataFrame(authors_scores)], axis = 1)
+        authors_scores_df.columns = ['name', 'n_articles', 'author_id', 'score']
+        authors_scores_df = authors_scores_df.sort_values('score', ascending = False)
+
+        # Get the ordered list of recommended people to the event
+        recs_order = authors_scores_df['author_id'].tolist()
+        print('Recs: {}'.format(recs_order[:10]))
+
+        recs_names = [id_people_mapping[x] for x in recs_order]
+        print('Recs Names: {}'.format(recs_names[:10]))
+
+        # Get the recommendation order of the actual recommended people
+        actual_order = [recs_order.index(actual_id) for actual_id in event_actual_people_ids]
+        print('Rec Order of Actual Speakers: {}'.format(actual_order))
+
+        rec_table = authors_scores_df[['name', 'author_id', 'score']][0:10].to_dict('records')
+
+        return rec_table
+    else:
+        return ''
+
 
 
 
@@ -143,6 +268,7 @@ def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, gr
             go.Scatter(
                 x = tsne_subset['tsne_0'], 
                 y = tsne_subset['tsne_1'], 
+                customdata = tsne_subset['author_id'],
                 mode = 'markers',
                 marker_symbol = 0,
                 opacity = 0.25,
@@ -165,6 +291,7 @@ def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, gr
             go.Scatter(
                 x = tsne_subset['tsne_0'], 
                 y = tsne_subset['tsne_1'], 
+                customdata = tsne_subset['event_id'],
                 mode = 'markers',
                 marker_symbol = 2,
                 opacity = 0.25,
@@ -187,6 +314,7 @@ def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, gr
         go.Scatter(
             x = tsne_subset['tsne_0'], 
             y = tsne_subset['tsne_1'], 
+            customdata = tsne_subset['author_id'],
             mode = 'markers',
             marker_symbol = 0,
             opacity = 1,
@@ -211,6 +339,7 @@ def draw_graph(checklist_values, dim_dropdown_values, people_dropdown_values, gr
         go.Scatter(
             x = tsne_subset['tsne_0'], 
             y = tsne_subset['tsne_1'], 
+            customdata = tsne_subset['event_id'],
             mode = 'markers',
             marker_symbol = 2,
             opacity = 1,
